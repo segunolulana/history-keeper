@@ -4,10 +4,11 @@
 // and every startup reconciles reality (open tabs) against the persistent ledger.
 
 import {
-  putVisits, ledgerTouch, ledgerGetAll, ledgerReplace, buryTabs,
+  putVisits, ledgerTouch, ledgerGetAll, ledgerMerge, getLastVisits, buryTabs,
 } from './db.js';
 
 const DAY = 24 * 60 * 60 * 1000;
+const LEDGER_PRUNE_AFTER = 7 * DAY; // forget URLs that haven't been open for a week
 const DEFAULTS = {
   thresholdDays: 90,      // close tabs untouched for this long
   autoClose: false,       // manual mode by default — you approve closures
@@ -24,10 +25,25 @@ async function getSettings() {
 // Alarms + lifecycle. Alarms persist across restarts and wake the worker.
 // ---------------------------------------------------------------------------
 
+// Only create alarms that are missing. Re-creating an alarm resets its timer,
+// so recreating the daily one on every browser start (frequent on Android)
+// meant it could never fire.
 async function ensureAlarms() {
   const s = await getSettings();
-  await chrome.alarms.create('syncHistory', { periodInMinutes: s.syncMinutes });
-  await chrome.alarms.create('tabSweep', { periodInMinutes: 60 * 24 }); // daily
+  const want = { syncHistory: s.syncMinutes, tabSweep: 60 * 24 };
+  for (const [name, periodInMinutes] of Object.entries(want)) {
+    const existing = await chrome.alarms.get(name);
+    if (!existing || existing.periodInMinutes !== periodInMinutes) {
+      await chrome.alarms.create(name, { periodInMinutes });
+    }
+  }
+}
+
+// Belt and braces: the 30-min sync alarm also runs the daily sweep if it is
+// overdue, in case the daily alarm or onStartup never fires on this browser.
+async function sweepIfDue() {
+  const { lastSweep } = await chrome.storage.local.get('lastSweep');
+  if (!lastSweep || Date.now() - lastSweep >= DAY) await sweep(false);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -40,11 +56,11 @@ chrome.runtime.onStartup.addListener(async () => {
   await ensureAlarms();
   await reconcileTabs();   // recover from browser kill: rebuild by URL
   await syncHistory();
-  await sweep(false);      // startup sweep (auto-close only if enabled)
+  await sweepIfDue();      // startup sweep (auto-close only if enabled)
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === 'syncHistory') await syncHistory();
+  if (alarm.name === 'syncHistory') { await syncHistory(); await sweepIfDue(); }
   if (alarm.name === 'tabSweep') await sweep(false);
 });
 
@@ -111,27 +127,49 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
-// Rebuild the ledger from reality. Called on every startup and before sweeps.
-// For each open tab, last-active = the most recent of:
-//   1. the browser's own tab.lastAccessed (Chromium 121+, survives restore)
-//   2. our persisted ledger entry for that URL
-//   3. "now" if the tab is brand new to us (fresh start, fair timer)
+// Reconcile the ledger with the tabs that are actually open.
+// - Tabs we've observed keep their recorded lastActive.
+// - Tabs we've never observed get an *estimate*: the newest of the URL's last
+//   archived history visit and the browser's tab.lastAccessed. Previously they
+//   got "now", so nothing could go stale until `threshold` days after install.
+// - Entries without a `source` predate this logic and were stamped "now" at
+//   install; they are re-estimated once.
+// - Merge, never clear: a partial tabs.query can't reset everyone's timer.
+function isTracked(url) {
+  return url && !url.startsWith('chrome') && !url.startsWith('browser');
+}
+
 async function reconcileTabs() {
-  const tabs = await chrome.tabs.query({});
+  const now = Date.now();
+  const tabs = (await chrome.tabs.query({})).filter((t) => isTracked(t.url));
   const ledger = await ledgerGetAll();
   const byUrl = new Map(ledger.map((e) => [e.url, e]));
-  const next = [];
+  const lastVisits = await getLastVisits([...new Set(tabs.map((t) => t.url))]);
+
+  const out = new Map();
   for (const tab of tabs) {
-    if (!tab.url || tab.url.startsWith('chrome') || tab.url.startsWith('browser')) continue;
+    if (out.has(tab.url)) continue;
     const known = byUrl.get(tab.url);
-    const lastActive = Math.max(
-      known ? known.lastActive : 0,
-      tab.lastAccessed || 0,
-    ) || Date.now();
-    next.push({ url: tab.url, title: tab.title || (known && known.title) || '', lastActive });
+    let entry;
+    if (known && known.source) {
+      entry = { ...known, lastSeen: now };
+    } else {
+      const estimate = Math.max(lastVisits.get(tab.url) || 0, tab.lastAccessed || 0) || now;
+      entry = {
+        url: tab.url,
+        title: tab.title || (known && known.title) || '',
+        lastActive: estimate,
+        source: 'seeded',
+        lastSeen: now,
+      };
+    }
+    out.set(tab.url, entry);
   }
-  // Replace wholesale: entries for URLs no longer open are dropped.
-  await ledgerReplace(next);
+  const prune = ledger
+    .filter((e) => !out.has(e.url) && now - (e.lastSeen || 0) > LEDGER_PRUNE_AFTER)
+    .map((e) => e.url);
+  const next = [...out.values()];
+  await ledgerMerge(next, prune);
   return next;
 }
 
@@ -156,6 +194,7 @@ async function findStaleTabs() {
         tabId: tab.id, url: tab.url,
         title: tab.title || entry.title || tab.url,
         lastActive: entry.lastActive,
+        source: entry.source,
       });
     }
   }
@@ -172,11 +211,55 @@ async function closeTabs(list) {
 async function sweep(forceManual) {
   const s = await getSettings();
   const stale = await findStaleTabs();
-  if (!stale.length) return 0;
-  if (s.autoClose || forceManual) return closeTabs(stale);
+  await chrome.storage.local.set({ lastSweep: Date.now() });
+  if (stale.length && (s.autoClose || forceManual)) {
+    const n = await closeTabs(stale);
+    await setBadge(0);
+    return n;
+  }
   // Auto-close off: surface a badge count instead of acting.
-  chrome.action.setBadgeText({ text: String(stale.length) });
+  await setBadge(stale.length);
   return 0;
+}
+
+async function setBadge(n) {
+  try { await chrome.action.setBadgeText({ text: n ? String(n) : '' }); } catch { /* no badge on some mobile builds */ }
+}
+
+// Snapshot for the dashboard's diagnostics panel, so we can see on-device
+// which signal (tabs.query, lastAccessed, history, alarms) is misbehaving.
+async function getDiagnostics() {
+  const now = Date.now();
+  const s = await getSettings();
+  const all = await chrome.tabs.query({});
+  const ledger = await ledgerGetAll();
+  const byUrl = new Map(ledger.map((e) => [e.url, e]));
+  const lastVisits = await getLastVisits([...new Set(all.map((t) => t.url).filter(Boolean))]);
+  const alarms = await chrome.alarms.getAll();
+  const { lastSweep, lastSync } = await chrome.storage.local.get(['lastSweep', 'lastSync']);
+  return {
+    now,
+    settings: s,
+    tabCount: all.length,
+    withUrl: all.filter((t) => t.url).length,
+    withLastAccessed: all.filter((t) => t.lastAccessed).length,
+    ledgerSize: ledger.length,
+    lastSweep: lastSweep || null,
+    lastSync: lastSync || null,
+    alarms: alarms.map((a) => ({ name: a.name, next: a.scheduledTime, period: a.periodInMinutes })),
+    tabs: all.map((t) => {
+      const e = byUrl.get(t.url);
+      return {
+        title: t.title || t.url || '(no url)',
+        active: !!t.active,
+        pinned: !!t.pinned,
+        ledger: e ? e.lastActive : null,
+        source: e ? (e.source || 'legacy') : null,
+        lastAccessed: t.lastAccessed || null,
+        history: lastVisits.get(t.url) || null,
+      };
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +273,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'closeTabs':    sendResponse(await closeTabs(msg.tabs)); break;
       case 'sweepNow':     sendResponse(await sweep(true)); break;
       case 'syncNow':      await syncHistory(); sendResponse(true); break;
+      case 'diagnostics':  sendResponse(await getDiagnostics()); break;
       default: sendResponse(null);
     }
   })();

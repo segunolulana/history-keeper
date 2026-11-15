@@ -90,7 +90,7 @@ async function refreshStale() {
     title.textContent = t.title;
     const age = document.createElement('div');
     age.className = 'stale-age';
-    age.textContent = `Last visited ${ageOf(t.lastActive)}`;
+    age.textContent = `Last visited ${ageOf(t.lastActive)}${t.source === 'seeded' ? ' (estimated from history)' : ''}`;
     meta.append(title, age);
     label.append(cb, meta);
     li.append(label);
@@ -148,6 +148,47 @@ async function refreshStats() {
     : 'Archive is empty — first sync runs automatically.';
 }
 
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+function agoShort(ms, now) {
+  if (!ms) return '—';
+  const d = (now - ms) / DAY;
+  if (d < 0) return `in ${(-d * 24).toFixed(1)}h`;
+  if (d < 1) return `${(d * 24).toFixed(1)}h`;
+  return `${Math.floor(d)}d`;
+}
+
+async function refreshDiagnostics() {
+  const d = await chrome.runtime.sendMessage({ type: 'diagnostics' });
+  if (!d) return;
+  const n = d.now;
+  $('#diag-summary').textContent = [
+    `tabs.query: ${d.tabCount} tabs, ${d.withUrl} with url, ${d.withLastAccessed} with lastAccessed`,
+    `ledger: ${d.ledgerSize} entries · threshold ${d.settings.thresholdDays}d · autoClose ${d.settings.autoClose}`,
+    `last sweep: ${agoShort(d.lastSweep, n)} ago · last sync: ${agoShort(d.lastSync, n)} ago`,
+    ...d.alarms.map((a) => `alarm ${a.name}: every ${a.period}m, next ${agoShort(a.next, n)}`),
+    `${navigator.userAgent}`,
+    '',
+    'per tab: ledger / lastAccessed / history (age), source',
+  ].join('\n');
+  const ul = $('#diag-tabs');
+  ul.innerHTML = '';
+  const rows = [...d.tabs].sort((a, b) => (a.ledger || n) - (b.ledger || n));
+  for (const t of rows) {
+    const li = document.createElement('li');
+    const title = document.createElement('div');
+    title.className = 'stale-title';
+    title.textContent = (t.active ? '● ' : '') + (t.pinned ? '📌 ' : '') + t.title;
+    const meta = document.createElement('div');
+    meta.className = 'stale-age';
+    meta.textContent = `${agoShort(t.ledger, n)} / ${agoShort(t.lastAccessed, n)} / ${agoShort(t.history, n)} · ${t.source || 'not in ledger'}`;
+    li.append(title, meta);
+    ul.append(li);
+  }
+}
+
 let toastTimer;
 function toast(msg) {
   const el = $('#toast');
@@ -172,6 +213,7 @@ $('#sync-now').addEventListener('click', async () => {
   toast('History synced');
   refreshStats();
 });
+$('#diag').addEventListener('toggle', () => { if ($('#diag').open) refreshDiagnostics(); });
 ['thresholdDays', 'autoClose', 'keepPinned'].forEach((id) =>
   $('#' + id).addEventListener('change', saveSettings)
 );

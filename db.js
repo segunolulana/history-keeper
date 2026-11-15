@@ -100,10 +100,15 @@ export async function getStats() {
 
 // ---------- tab ledger ----------
 
+// Ledger entry: { url, title, lastActive, source, lastSeen }
+//   source  'observed' = we saw the tab activated/loaded ourselves
+//           'seeded'   = estimated (history / tab.lastAccessed) for a tab we never saw
+//   lastSeen = last time this URL was present among the open tabs
 export async function ledgerTouch(url, title, when = Date.now()) {
   if (!url || url.startsWith('chrome') || url.startsWith('browser')) return;
   const db = await openDB();
-  await tx(db, 'tabLedger', 'readwrite', (s) => s.put({ url, title: title || '', lastActive: when }));
+  await tx(db, 'tabLedger', 'readwrite', (s) =>
+    s.put({ url, title: title || '', lastActive: when, source: 'observed', lastSeen: when }));
 }
 
 export async function ledgerGetAll() {
@@ -114,12 +119,28 @@ export async function ledgerGetAll() {
   });
 }
 
-export async function ledgerReplace(entries) {
+// Merge: upsert `entries`, delete `removeUrls`. Never clears the store, so a
+// partial tabs.query (e.g. during session restore) can't wipe the timers.
+export async function ledgerMerge(entries, removeUrls = []) {
   const db = await openDB();
   await tx(db, 'tabLedger', 'readwrite', (s) => {
-    s.clear();
     entries.forEach((e) => s.put(e));
+    removeUrls.forEach((u) => s.delete(u));
   });
+}
+
+// url -> last archived visit time (from the `urls` store, which outlives
+// the browser's own ~90-day history retention).
+export async function getLastVisits(urls) {
+  const db = await openDB();
+  const out = new Map();
+  await tx(db, 'urls', 'readonly', (s) => {
+    for (const u of urls) {
+      const r = s.get(u);
+      r.onsuccess = () => { if (r.result) out.set(u, r.result.lastVisit); };
+    }
+  });
+  return out;
 }
 
 // ---------- graveyard ----------
