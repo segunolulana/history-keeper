@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History Keeper</title>
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>History Keeper<span class="amp"> &amp; </span>Tab Reaper</h1>
+    <p id="stats" class="stats">Loading archive…</p>
+  </header>
+
+  <section>
+    <h2>Export history</h2>
+    <p class="hint">CSV lands in your Downloads folder.</p>
+    <div class="btn-grid">
+      <button class="btn" data-range="90">Last 3 months</button>
+      <button class="btn" data-range="730">Last 2 years</button>
+      <button class="btn" data-range="all">Everything</button>
+      <button class="btn ghost" id="export-graveyard">Closed-tab log</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Stale tabs</h2>
+    <p class="hint" id="stale-hint">Tabs not visited within your threshold.</p>
+    <ul id="stale-list" class="stale-list"></ul>
+    <div class="btn-grid">
+      <button class="btn danger" id="close-selected" disabled>Close selected</button>
+      <button class="btn danger ghost" id="close-all" disabled>Close all stale</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Settings</h2>
+    <label class="row">
+      <span>Close tabs older than</span>
+      <span class="row-right">
+        <input type="number" id="thresholdDays" min="1" max="3650" inputmode="numeric"> days
+      </span>
+    </label>
+    <label class="row">
+      <span>Auto-close on daily sweep</span>
+      <input type="checkbox" id="autoClose" class="switch">
+    </label>
+    <label class="row">
+      <span>Never close pinned tabs</span>
+      <input type="checkbox" id="keepPinned" class="switch">
+    </label>
+    <button class="btn ghost" id="sync-now">Sync history now</button>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
+</main>
+<script type="module" src="dashboard.js"></script>
+</body>
+</html>

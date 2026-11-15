@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "History Keeper & Tab Reaper",
+  "version": "1.0.0",
+  "description": "Archives browsing history forever (beyond the 90-day limit), exports to CSV, and closes tabs you haven't touched in months. Built mobile-first.",
+  "permissions": ["history", "tabs", "alarms", "downloads", "storage"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open History Keeper dashboard"
+  },
+  "options_ui": {
+    "page": "dashboard.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}
