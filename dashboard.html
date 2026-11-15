@@ -25,12 +25,25 @@
   </section>
 
   <section>
+    <h2>Search history</h2>
+    <input type="search" id="hs-q" class="search" placeholder="Search titles and URLs" autocomplete="off" enterkeyhint="search">
+    <div id="hs-day" class="chip" hidden>
+      <span id="hs-day-label"></span>
+      <button type="button" id="hs-day-clear" class="chip-x" aria-label="Show all days">×</button>
+    </div>
+    <p class="hint" id="hs-info"></p>
+    <ul id="hs-results" class="hs-results"></ul>
+  </section>
+
+  <section>
     <h2>Stale tabs</h2>
-    <p class="hint" id="stale-hint">Tabs not visited within your threshold.</p>
+    <p class="hint" id="stale-hint">Tabs not visited within your threshold, including tabs the browser
+      hides from extensions until you open them. Those are marked <span class="tag">not loaded</span>:
+      the extension can't close them, so close them in your tab switcher, then remove them here.</p>
     <ul id="stale-list" class="stale-list"></ul>
     <div class="btn-grid">
-      <button class="btn danger" id="close-selected" disabled>Close selected</button>
-      <button class="btn danger ghost" id="close-all" disabled>Close all stale</button>
+      <button class="btn danger" id="close-selected" disabled>Close / remove selected</button>
+      <button class="btn danger ghost" id="close-all" disabled>Close / remove all</button>
     </div>
   </section>
 
