@@ -381,7 +381,15 @@ $('#diag').addEventListener('toggle', () => { if ($('#diag').open) refreshDiagno
   $('#' + id).addEventListener('change', saveSettings)
 );
 
+// Search starts collapsed; its open/closed state is remembered per device.
+let searchLoaded = false;
+$('#hs').addEventListener('toggle', () => {
+  const open = $('#hs').open;
+  try { localStorage.setItem('hsOpen', open ? '1' : '0'); } catch { /* storage unavailable */ }
+  if (open && !searchLoaded) { searchLoaded = true; runSearch(); }
+});
+try { if (localStorage.getItem('hsOpen') === '1') $('#hs').open = true; } catch { /* storage unavailable */ }
+
 loadSettings();
 refreshStats();
-runSearch();
 refreshStale();
